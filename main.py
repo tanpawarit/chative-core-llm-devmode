@@ -1,5 +1,7 @@
+import html
 import os
-from typing import Annotated, List, Dict, Tuple, TypedDict
+from dataclasses import dataclass
+from typing import Annotated, List, Dict, Optional, Tuple, TypedDict
 
 from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
@@ -9,6 +11,33 @@ from langgraph.graph.message import add_messages
 
 from prompt.detect_intent import INTENT_TEMPLATE
 from prompt.extract_entity import ENTITY_TEMPLATE
+
+
+@dataclass
+class IntentInfo:
+    code: str
+    confidence: float
+    priority_score: float
+
+
+@dataclass
+class LanguageInfo:
+    code: str
+    confidence: float
+    primary: bool
+
+
+@dataclass
+class SentimentInfo:
+    sentiment: str
+    confidence: float
+
+
+@dataclass
+class DetectIntentResult:
+    intents: List[IntentInfo]
+    languages: List[LanguageInfo]
+    sentiment: Optional[SentimentInfo]
 
 def RenderDetectIntentSystemPrompt(
     intents: str,
@@ -154,8 +183,10 @@ def intentChatmodelNode(state: State) -> dict:
         {"role": "user", "content": state["intent_model"]["userprompt"]},
     ]
     result = llm.invoke(messages)
+    current = state.get("intent_model", {})
     return {
         "intent_model":{
+            **current,
             "output": result.content
             }
         }
@@ -203,21 +234,103 @@ def entityChatmodelNode(state: State) -> dict:
         {"role": "user", "content": state["entity_model"]["userprompt"]},
     ]
     result = llm.invoke(messages)
+    current = state.get("entity_model", {})
     return {
         "entity_model":{
+            **current,
             "output": result.content
             }
         }
 
-def intentParser():
-    pass
+def intentParser(
+    raw_output: str,
+    tuple_delimiter: str = "<||>",
+    record_delimiter: str = "##",
+    completed_delimiter: str = "<|COMPLETED|>",
+) -> DetectIntentResult:
+    """Parse the LLM TSV-style output into structured intent data."""
+
+    if raw_output is None:
+        raise ValueError("detect-intent output is None")
+
+    text = html.unescape(raw_output)
+    text = text.replace("\r\n", "\n").strip()
+    if not text:
+        raise ValueError("detect-intent output is empty")
+
+    if completed_delimiter in text:
+        # Ignore everything after the completion marker.
+        text = text.split(completed_delimiter, 1)[0]
+
+    records = [segment.strip() for segment in text.split(record_delimiter)]
+
+    result = DetectIntentResult(intents=[], languages=[], sentiment=None)
+
+    def _to_float(value: str) -> Optional[float]:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    for record in records:
+        if not record:
+            continue
+
+        cleaned = record.strip()
+        if not cleaned:
+            continue
+
+        if cleaned.startswith("(") and cleaned.endswith(")"):
+            cleaned = cleaned[1:-1].strip()
+        else:
+            cleaned = cleaned.strip("() ")
+
+        if not cleaned:
+            continue
+
+        parts = [part.strip() for part in cleaned.split(tuple_delimiter)]
+        if not parts:
+            continue
+
+        key = parts[0].lower()
+
+        if key == "intent" and len(parts) >= 4:
+            code = parts[1]
+            confidence = _to_float(parts[2])
+            priority = _to_float(parts[3])
+            if not code or confidence is None or priority is None:
+                continue
+            result.intents.append(IntentInfo(code=code, confidence=confidence, priority_score=priority))
+
+        elif key == "language" and len(parts) >= 4:
+            code = parts[1]
+            confidence = _to_float(parts[2])
+            primary_flag = (parts[3] or "").strip().lower()
+            if not code or confidence is None:
+                continue
+            primary = primary_flag in {"1", "true", "yes", "primary"}
+            result.languages.append(LanguageInfo(code=code, confidence=confidence, primary=primary))
+
+        elif key == "sentiment" and len(parts) >= 3:
+            label = parts[1]
+            confidence = _to_float(parts[2])
+            if not label or confidence is None:
+                continue
+            candidate = SentimentInfo(sentiment=label, confidence=confidence)
+            if result.sentiment is None or result.sentiment.confidence < candidate.confidence:
+                result.sentiment = candidate
+
+    if not result.intents and not result.languages and result.sentiment is None:
+        raise ValueError("no valid intent, language, or sentiment found in detect-intent output")
+
+    return result
 
 # Build graph
 builder = StateGraph(State)
 builder.add_node("intentInputNode", intentInputNode)
-builder.add_node("entityInputNode", entityInputNode)
+# builder.add_node("entityInputNode", entityInputNode)
 builder.add_node("intentChatmodelNode", intentChatmodelNode)
-builder.add_node("entityChatmodelNode", entityChatmodelNode)
+# builder.add_node("entityChatmodelNode", entityChatmodelNode)
 
 builder.add_edge(START, "intentInputNode")
 builder.add_edge("intentInputNode", "intentChatmodelNode")
@@ -234,18 +347,25 @@ def run_once(user_input: str):
     ]
     state = {
         "messages": initial_messages,
-        "systemprompt": "",
-        "userprompt": "",
-        "nlu_output": "",
+        "intent_model": {
+            "systemprompt": "",
+            "userprompt": "",
+            "output": "",
+        },
+        "entity_model": {
+            "systemprompt": "",
+            "userprompt": "",
+            "output": "",
+        },
     }
 
     final = graph.invoke(state)
     print("=== SYSTEM PROMPT ===")
-    print(final["systemprompt"])
+    print(final["intent_model"]["systemprompt"])
     print("=== USER PROMPT ===")
-    print(final["userprompt"])
+    print(final["intent_model"]["userprompt"])
     print("=== NLU OUTPUT ===")
-    print(final["nlu_output"])
+    print(final["intent_model"]["output"])
 
 if __name__ == "__main__":
     run_once("I want to find running shoes.")
