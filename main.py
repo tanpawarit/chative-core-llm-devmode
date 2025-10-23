@@ -242,15 +242,51 @@ def intentParser(
 def actionDeciderBranch(state: State) -> dict:
     intent_output = state["intent_model"]["output"]
     intent_result = intentParser(intent_output)
+
     # Find the highest confidence intent and save to state
- 
+    def _intent_sort_key(item: IntentInfo) -> Tuple[float, float]:
+        return (
+            item.confidence if item.confidence is not None else float("-inf"),
+            item.priority_score if item.priority_score is not None else float("-inf"),
+        )
+
+    primary_intent: Optional[IntentInfo] = None
+    if intent_result.intents:
+        primary_intent = max(intent_result.intents, key=_intent_sort_key)
+
     # Find the primary language and save to state
+    def _language_sort_key(item: LanguageInfo) -> float:
+        return item.confidence if item.confidence is not None else float("-inf")
+
+    primary_language: Optional[LanguageInfo] = None
+    if intent_result.languages:
+        primary_candidates = [lang for lang in intent_result.languages if lang.primary]
+        language_pool = (
+            [lang for lang in primary_candidates if lang.confidence is not None]
+            or [lang for lang in intent_result.languages if lang.confidence is not None]
+        )
+        if language_pool:
+            primary_language = max(language_pool, key=_language_sort_key)
 
     # Find the highest confidence sentiment and save to state
+    dominant_sentiment: Optional[SentimentInfo] = intent_result.sentiment
 
     # Fetch the default action for the primary intent (i hardcode with ACTION) and save to state
+    updates: Dict[str, str] = {}
+    if primary_intent:
+        updates["intent"] = primary_intent.code
+        updates["action"] = ACTION
+    if primary_language:
+        updates["language"] = primary_language.code
+    if dominant_sentiment:
+        updates["sentiment"] = dominant_sentiment.sentiment
 
-    return #(response_node or entityInputNode)
+    if len(ENTITIES) > 0:
+        # select entity extraction path
+
+    else:
+        # select direct response path
+    return updates
 
 # Build graph
 builder = StateGraph(State)
