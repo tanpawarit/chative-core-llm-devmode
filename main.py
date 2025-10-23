@@ -10,7 +10,7 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 
 from prompt.prompt import RenderDetectIntentSystemPrompt, RenderExtractEntitySystemPrompt, RenderConversationContextPrompt
-from src.utils import DetectIntentResult, IntentInfo, LanguageInfo, SentimentInfo, intentParser
+from src.utils import DetectIntentResult, IntentInfo, LanguageInfo, SentimentInfo, intentParser, entitiesParser
  
 # ---- LangGraph wiring --------------------------------------------------------
 load_dotenv()
@@ -345,6 +345,7 @@ def route_after_intent(state: State) -> str:
     print("Routing to response...")
     return "responseNode"
 
+# TODO
 def entityEvaluatorBranch(state: State) -> bool:
     # simple evaluator to decide if entity extraction is needed
     action = state.get("action", "")
@@ -352,6 +353,7 @@ def entityEvaluatorBranch(state: State) -> bool:
     entities = get_entities_by_intent_and_action_repo(mock_db, intent, action)
     return len(entities) > 0
 
+# TODO
 def responseEntityFallbackNode(state: State) -> dict:
     # simple fallback response generator 
     intent = state.get("intent", "unknown_intent")
@@ -442,6 +444,10 @@ def run_once(user_input: str):
     print(final["entity_model"]["userprompt"])
     print("=== ENTITY RESULT ===")
     print(final["entity_model"]["output"])
+    print("=== ENTITIES PARSED ===")
+    entities_parsed = entitiesParser(final["entity_model"]["output"])
+    for entity in entities_parsed:
+        print(entity)
     print("=== FINAL RESPONSE ===")
     print(final.get("response", ""))
 
