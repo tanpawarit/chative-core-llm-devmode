@@ -1,5 +1,6 @@
 import html
-import os 
+import os
+from pathlib import Path
 from typing import Annotated, List, Dict, Optional, Tuple, TypedDict
 
 from dotenv import load_dotenv
@@ -9,9 +10,8 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 
 from prompt.prompt import RenderDetectIntentSystemPrompt, RenderExtractEntitySystemPrompt, RenderConversationContextPrompt
-from src.utils import DetectIntentResult, IntentInfo, LanguageInfo, SentimentInfo
-
-
+from src.utils import DetectIntentResult, IntentInfo, LanguageInfo, SentimentInfo, intentParser
+ 
 # ---- LangGraph wiring --------------------------------------------------------
 load_dotenv()
 api_key = os.getenv("OPENAI_API_KEY")
@@ -98,10 +98,13 @@ def get_entities_repo(data, intent_name):
             return item["entities"]
     return []
 
-def get_entities_by_action_repo(data, action_name):
+def get_entities_by_intent_and_action_repo(data, intent_name, action_name):
     result = []
+    if not intent_name or not action_name:
+        return result
     for item in data:
-        if item["action"] == action_name:
+        has_intent = any(i["name"] == intent_name for i in item["intents"])
+        if has_intent and item["action"] == action_name:
             result.extend(item["entities"])
     return result
 
@@ -196,7 +199,7 @@ def entityChatmodelNode(state: State) -> dict:
         {"role": "user", "content": state["entity_model"]["userprompt"]},
     ]
     result = llm.invoke(messages)
-    current = state.get("entity_model", {})
+    current = state.get("entity_model", {})  
     return {
         "entity_model":{
             **current,
@@ -334,11 +337,20 @@ def actionDeciderNode(state: State) -> dict:
 
 
 def route_after_intent(state: State) -> str:
-    if get_entities_by_action_repo(mock_db, state.get("action")):
+    if get_entities_by_intent_and_action_repo(
+        mock_db, state.get("intent"), state.get("action")
+    ):
         print("Routing to entity extraction...")
         return "entityInputNode"
     print("Routing to response...")
     return "responseNode"
+
+def entityEvaluatorBranch(state: State) -> bool:
+    # simple evaluator to decide if entity extraction is needed
+    action = state.get("action", "")
+    intent = state.get("intent", "")
+    entities = get_entities_by_intent_and_action_repo(mock_db, intent, action)
+    return len(entities) > 0
 
 def responseEntityFallbackNode(state: State) -> dict:
     # simple fallback response generator 
@@ -373,7 +385,7 @@ builder.add_node("entityInputNode", entityInputNode)
 builder.add_node("entityChatmodelNode", entityChatmodelNode)
 builder.add_node("responseNode", responseNode)
 
-builder.add_edge(START, "intentInputNode")ß
+builder.add_edge(START, "intentInputNode")
 builder.add_edge("intentInputNode", "intentChatmodelNode")
 builder.add_edge("intentChatmodelNode", "actionDeciderNode")
 builder.add_conditional_edges(
@@ -390,6 +402,11 @@ builder.add_edge("responseNode", END)
 
 graph = builder.compile()
 
+# ---- Generate graph visualization -------------------------------------------------
+graph_png = graph.get_graph().draw_mermaid_png()
+output_path = Path("graph_mermaid.png")
+output_path.write_bytes(graph_png)
+print(f"Saved graph visualization to {output_path.resolve()}")
 # ---- Demo runner -------------------------------------------------------------
 def run_once(user_input: str):
     # Start with a tiny history and feed the new user message
@@ -413,16 +430,20 @@ def run_once(user_input: str):
     }
 
     final = graph.invoke(state)
-    print("=== SYSTEM PROMPT ===")
-    print(final["intent_model"]["systemprompt"])
-    print("=== USER PROMPT ===")
-    print(final["intent_model"]["userprompt"])
+    # print("=== SYSTEM PROMPT ===")
+    # print(final["intent_model"]["systemprompt"])
+    # print("=== USER PROMPT ===")
+    # print(final["intent_model"]["userprompt"])
     print("=== NLU OUTPUT ===")
-    print(final["intent_model"]["output"])
-    print("=== PARSED RESULT ===")
-    print(intentParser(final["intent_model"]["output"])) 
+    print(final["intent_model"]["output"]) 
+    print("=== ENTITY SYSTEM PROMPT  ===")
+    print(final["entity_model"]["systemprompt"])
+    print("=== ENTITY USER PROMPT ===")
+    print(final["entity_model"]["userprompt"])
+    print("=== ENTITY RESULT ===")
+    print(final["entity_model"]["output"])
     print("=== FINAL RESPONSE ===")
     print(final.get("response", ""))
 
 if __name__ == "__main__":
-    run_once("I want to find running shoes.")
+    run_once("อยากเช็คออเดอร์ #B67890 ครับ")
