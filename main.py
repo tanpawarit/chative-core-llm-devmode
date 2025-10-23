@@ -41,6 +41,7 @@ class State(TypedDict):
     language: str
     sentiment: str
     action: str
+    response: str
 
 
 # ============================================================================
@@ -48,13 +49,61 @@ class State(TypedDict):
 llm = init_chat_model(f"{provider}:{model}", temperature=0.0)
 
 # Node 1: prepare NLU prompts from history
-INTENTS = "greet:0.6, search_product:0.8, farewell:0.6"
-ACTION = "knowledge_search"  # or "knowledge_search"
-ENTITIES = [
-  {"name": "order_id", "type": "text", "description": "order reference number"},
-  {"name": "payment_amount", "type": "currency", "description": "amount paid"},
-  {"name": "payment_status", "type": "text", "description": "status of payment"}
+INTENTS = "greet:0.6, search_product:0.8, farewell:0.6"  
+
+mock_db = [
+    {
+        "intents": [
+            {"name": "greet", "confidence": 0.6}
+        ],
+        "action": "knowledge_search",
+        "entities": [
+            {"name": "order_id", "type": "text", "description": "order reference number"},
+            {"name": "payment_amount", "type": "currency", "description": "amount paid"},
+            {"name": "payment_status", "type": "text", "description": "status of payment"}
+        ]
+    },
+    {
+        "intents": [
+            {"name": "search_product", "confidence": 0.8}
+        ],
+        "action": "knowledge_search",
+        "entities": [
+            {"name": "order_id", "type": "text", "description": "order reference number"},
+            {"name": "payment_amount", "type": "currency", "description": "amount paid"},
+            {"name": "payment_status", "type": "text", "description": "status of payment"}
+        ]
+    },
+    {
+        "intents": [
+            {"name": "farewell", "confidence": 0.6}
+        ],
+        "action": "knowledge_search",
+        "entities": [
+            {"name": "order_id", "type": "text", "description": "order reference number"},
+            {"name": "payment_amount", "type": "currency", "description": "amount paid"},
+            {"name": "payment_status", "type": "text", "description": "status of payment"}
+        ]
+    }
 ]
+def get_action_repo(data, intent_name):
+    for item in data:
+        if any(i["name"] == intent_name for i in item["intents"]):
+            return item["action"]
+    return None
+
+def get_entities_repo(data, intent_name):
+    for item in data:
+        if any(i["name"] == intent_name for i in item["intents"]):
+            return item["entities"]
+    return []
+
+def get_entities_by_action_repo(data, action_name):
+    result = []
+    for item in data:
+        if item["action"] == action_name:
+            result.extend(item["entities"])
+    return result
 
 def intentInputNode(state: State) -> dict: 
     msgs: List[Dict[str, str]] = []
@@ -131,7 +180,7 @@ def entityInputNode(state: State) -> dict:
         msgs.append(mapped)
 
     userprompt, _current = RenderConversationContextPrompt(msgs)
-    systemprompt = RenderExtractEntitySystemPrompt(INTENTS)
+    systemprompt = RenderExtractEntitySystemPrompt(state.get("intent"), get_entities_repo(mock_db, state.get("intent")))
 
     return {
         "entity_model": {
@@ -239,7 +288,7 @@ def intentParser(
     return result
 
 # Node 5: simple action decider based on intent (response or entity)
-def actionDeciderBranch(state: State) -> dict:
+def actionDeciderNode(state: State) -> dict:
     intent_output = state["intent_model"]["output"]
     intent_result = intentParser(intent_output)
 
@@ -275,29 +324,69 @@ def actionDeciderBranch(state: State) -> dict:
     updates: Dict[str, str] = {}
     if primary_intent:
         updates["intent"] = primary_intent.code
-        updates["action"] = ACTION
+        updates["action"] = get_action_repo(mock_db, primary_intent.code)  
     if primary_language:
         updates["language"] = primary_language.code
     if dominant_sentiment:
         updates["sentiment"] = dominant_sentiment.sentiment
 
-    if len(ENTITIES) > 0:
-        # select entity extraction path
-
-    else:
-        # select direct response path
     return updates
+
+
+def route_after_intent(state: State) -> str:
+    if get_entities_by_action_repo(mock_db, state.get("action")):
+        print("Routing to entity extraction...")
+        return "entityInputNode"
+    print("Routing to response...")
+    return "responseNode"
+
+def responseEntityFallbackNode(state: State) -> dict:
+    # simple fallback response generator 
+    intent = state.get("intent", "unknown_intent")
+    language = state.get("language", "unknown_language")
+    sentiment = state.get("sentiment", "unknown_sentiment")
+
+    response_text = f"Entity extraction could not be performed for intent: {intent}, language: {language}, sentiment: {sentiment}."
+    return {
+        "response": response_text
+    }
+
+# simple response generator 
+def responseNode(state: State) -> dict:
+    # Placeholder response generator
+    intent = state.get("intent", "unknown_intent")
+    language = state.get("language", "unknown_language")
+    sentiment = state.get("sentiment", "unknown_sentiment")
+
+    response_text = f"Detected intent: {intent}, language: {language}, sentiment: {sentiment}."
+    return {
+        "response": response_text
+    }
+
 
 # Build graph
 builder = StateGraph(State)
 builder.add_node("intentInputNode", intentInputNode)
-# builder.add_node("entityInputNode", entityInputNode)
 builder.add_node("intentChatmodelNode", intentChatmodelNode)
-# builder.add_node("entityChatmodelNode", entityChatmodelNode)
+builder.add_node("actionDeciderNode", actionDeciderNode)
+builder.add_node("entityInputNode", entityInputNode)
+builder.add_node("entityChatmodelNode", entityChatmodelNode)
+builder.add_node("responseNode", responseNode)
 
-builder.add_edge(START, "intentInputNode")
+builder.add_edge(START, "intentInputNode")ß
 builder.add_edge("intentInputNode", "intentChatmodelNode")
-builder.add_edge("intentChatmodelNode", END)
+builder.add_edge("intentChatmodelNode", "actionDeciderNode")
+builder.add_conditional_edges(
+    "actionDeciderNode",
+    route_after_intent,
+    {
+        "entityInputNode": "entityInputNode",
+        "responseNode": "responseNode",
+    },
+)
+builder.add_edge("entityInputNode", "entityChatmodelNode")
+builder.add_edge("entityChatmodelNode", "responseNode")
+builder.add_edge("responseNode", END)
 
 graph = builder.compile()
 
@@ -320,6 +409,7 @@ def run_once(user_input: str):
             "userprompt": "",
             "output": "",
         },
+        "response": "",
     }
 
     final = graph.invoke(state)
@@ -330,7 +420,9 @@ def run_once(user_input: str):
     print("=== NLU OUTPUT ===")
     print(final["intent_model"]["output"])
     print("=== PARSED RESULT ===")
-    print(intentParser(final["intent_model"]["output"]))
+    print(intentParser(final["intent_model"]["output"])) 
+    print("=== FINAL RESPONSE ===")
+    print(final.get("response", ""))
 
 if __name__ == "__main__":
     run_once("I want to find running shoes.")

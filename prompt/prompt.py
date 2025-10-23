@@ -1,6 +1,7 @@
+import json
 from prompt.detect_intent import INTENT_TEMPLATE
 from prompt.extract_entity import ENTITY_TEMPLATE
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Union
 
 def RenderDetectIntentSystemPrompt(
     intents: str,
@@ -17,15 +18,19 @@ def RenderDetectIntentSystemPrompt(
 
 
 def RenderExtractEntitySystemPrompt(
-    intents: str, # IntentCode from detect_intent output
-    entities: List[Dict[str, str]], # list of {"name": ..., "type": ..., "description": ...}
+    intent: str,  # IntentCode from detect_intent output
+    entities: Union[str, List[Dict[str, str]]],  # list of {"name": ..., "type": ..., "description": ...}
     tuple_delimiter: str = "<||>",
     record_delimiter: str = "##",
     completed_delimiter: str = "<|COMPLETED|>",
 ) -> str:
     prompt = ENTITY_TEMPLATE
-    prompt = prompt.replace("{{.Intents}}", intents.strip())
-    prompt = prompt.replace("{{.Entities}}", entities.strip())
+    prompt = prompt.replace("{{.Intent}}", intent.strip())
+    if isinstance(entities, str):
+        entities_str = entities.strip()
+    else:
+        entities_str = json.dumps(entities, ensure_ascii=False, indent=2)
+    prompt = prompt.replace("{{.Entities}}", entities_str)
     prompt = prompt.replace("{{.TupleDelimiter}}", tuple_delimiter)
     prompt = prompt.replace("{{.RecordDelimiter}}", record_delimiter)
     prompt = prompt.replace("{{.CompletedDelimiter}}", completed_delimiter)
