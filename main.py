@@ -1,6 +1,5 @@
 import html
-import os
-from dataclasses import dataclass
+import os 
 from typing import Annotated, List, Dict, Optional, Tuple, TypedDict
 
 from dotenv import load_dotenv
@@ -9,100 +8,9 @@ from langchain_core.messages import BaseMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 
-from prompt.detect_intent import INTENT_TEMPLATE
-from prompt.extract_entity import ENTITY_TEMPLATE
+from prompt.prompt import RenderDetectIntentSystemPrompt, RenderExtractEntitySystemPrompt, RenderConversationContextPrompt
+from src.utils import DetectIntentResult, IntentInfo, LanguageInfo, SentimentInfo
 
-
-@dataclass
-class IntentInfo:
-    code: str
-    confidence: float
-    priority_score: float
-
-
-@dataclass
-class LanguageInfo:
-    code: str
-    confidence: float
-    primary: bool
-
-
-@dataclass
-class SentimentInfo:
-    sentiment: str
-    confidence: float
-
-
-@dataclass
-class DetectIntentResult:
-    intents: List[IntentInfo]
-    languages: List[LanguageInfo]
-    sentiment: Optional[SentimentInfo]
-
-def RenderDetectIntentSystemPrompt(
-    intents: str,
-    tuple_delimiter: str = "<||>",
-    record_delimiter: str = "##",
-    completed_delimiter: str = "<|COMPLETED|>",
-) -> str:
-    prompt = INTENT_TEMPLATE
-    prompt = prompt.replace("{{.Intents}}", intents.strip())
-    prompt = prompt.replace("{{.TupleDelimiter}}", tuple_delimiter)
-    prompt = prompt.replace("{{.RecordDelimiter}}", record_delimiter)
-    prompt = prompt.replace("{{.CompletedDelimiter}}", completed_delimiter)
-    return prompt
-
-
-def RenderExtractEntitySystemPrompt(
-    intents: str, # IntentCode from detect_intent output
-    entities: List[Dict[str, str]], # list of {"name": ..., "type": ..., "description": ...}
-    tuple_delimiter: str = "<||>",
-    record_delimiter: str = "##",
-    completed_delimiter: str = "<|COMPLETED|>",
-) -> str:
-    prompt = ENTITY_TEMPLATE
-    prompt = prompt.replace("{{.Intents}}", intents.strip())
-    prompt = prompt.replace("{{.Entities}}", entities.strip())
-    prompt = prompt.replace("{{.TupleDelimiter}}", tuple_delimiter)
-    prompt = prompt.replace("{{.RecordDelimiter}}", record_delimiter)
-    prompt = prompt.replace("{{.CompletedDelimiter}}", completed_delimiter)
-    return prompt
-
-
-def RenderConversationContextPrompt(messages: List[Dict[str, str]]) -> Tuple[str, str]:
-    """
-    messages: list of {"role": "assistant"|"admin"|"user", "text": "..."}
-    Returns: (prompt_str, current_user_text)
-    """
-    lines = ["<conversation_context>"]
-    current = ""
-    latest = ""
-
-    for msg in messages:
-        role = (msg.get("role") or "user").lower()
-        text = (msg.get("text") or "").strip()
-        if not text:
-            continue
-        latest = text
-
-        if role == "assistant":
-            lines.append(f"AssistantMessage({text})")
-        elif role == "admin":
-            lines.append(f"AdminMessage({text})")
-        else:
-            lines.append(f"UserMessage({text})")
-            if not current:
-                current = text
-
-    if not current:
-        current = latest
-
-    lines.append("</conversation_context>")
-    lines.append("<current_message_to_analyze>")
-    lines.append(f"UserMessage({current})")
-    lines.append("</current_message_to_analyze>")
-
-    return "\n".join(lines) + "\n", current
 
 # ---- LangGraph wiring --------------------------------------------------------
 load_dotenv()
@@ -113,16 +21,16 @@ if not api_key:
 provider = os.getenv("LLM_PROVIDER", "openai")
 model = os.getenv("LLM_MODEL", "gpt-4.1")
 
-# ============================================================================
+# ================================= Global State ===========================================
 class IntentLm(TypedDict):
-    systemprompt: str                                         # generated system prompt
-    userprompt: str                                           # generated user prompt
-    output: str                                           # model's tuple output
+    systemprompt: str                                     
+    userprompt: str                                        
+    output: str                               
 
 class EntityLm(TypedDict):
-    systemprompt: str                                         # generated system prompt
-    userprompt: str                                           # generated user prompt
-    output: str                                           # model's tuple output
+    systemprompt: str                                     
+    userprompt: str                                        
+    output: str                               
  
 class State(TypedDict):
     messages: Annotated[list, add_messages]      
@@ -141,9 +49,7 @@ ENTITIES = [
   {"name": "payment_status", "type": "text", "description": "status of payment"}
 ]
 
-def intentInputNode(state: State) -> dict:
-    # Convert LangGraph messages -> our minimal schema
-    # Expect entries like {"role": "user"|"assistant", "content": "..."}
+def intentInputNode(state: State) -> dict: 
     msgs: List[Dict[str, str]] = []
     for m in state["messages"]:
         if isinstance(m, dict):
@@ -325,6 +231,14 @@ def intentParser(
 
     return result
 
+# Node 5: simple action decider based on intent (response or entity)
+def actionDeciderBranch(state: State) -> dict:
+    intent_output = state["intent_model"]["output"]
+    intent_result = intentParser(intent_output)
+
+ 
+   
+
 # Build graph
 builder = StateGraph(State)
 builder.add_node("intentInputNode", intentInputNode)
@@ -366,6 +280,8 @@ def run_once(user_input: str):
     print(final["intent_model"]["userprompt"])
     print("=== NLU OUTPUT ===")
     print(final["intent_model"]["output"])
+    print("=== PARSED RESULT ===")
+    print(intentParser(final["intent_model"]["output"]))
 
 if __name__ == "__main__":
     run_once("I want to find running shoes.")
