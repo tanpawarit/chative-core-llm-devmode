@@ -37,12 +37,19 @@ class State(TypedDict):
     intent_model: IntentLm 
     entity_model: EntityLm
 
+    intent: str
+    language: str
+    sentiment: str
+    action: str
+
+
 # ============================================================================
 
 llm = init_chat_model(f"{provider}:{model}", temperature=0.0)
 
 # Node 1: prepare NLU prompts from history
 INTENTS = "greet:0.6, search_product:0.8, farewell:0.6"
+ACTION = "knowledge_search"  # or "knowledge_search"
 ENTITIES = [
   {"name": "order_id", "type": "text", "description": "order reference number"},
   {"name": "payment_amount", "type": "currency", "description": "amount paid"},
@@ -235,9 +242,15 @@ def intentParser(
 def actionDeciderBranch(state: State) -> dict:
     intent_output = state["intent_model"]["output"]
     intent_result = intentParser(intent_output)
-
+    # Find the highest confidence intent and save to state
  
-   
+    # Find the primary language and save to state
+
+    # Find the highest confidence sentiment and save to state
+
+    # Fetch the default action for the primary intent (i hardcode with ACTION) and save to state
+
+    return #(response_node or entityInputNode)
 
 # Build graph
 builder = StateGraph(State)
