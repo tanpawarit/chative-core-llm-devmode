@@ -36,13 +36,15 @@ class State(TypedDict):
     messages: Annotated[list, add_messages]      
     intent_model: IntentLm 
     entity_model: EntityLm
-
+    missing_entities: List[str]
+    
     intent: str
     language: str
     sentiment: str
     action: str
     response: str
 
+     
 
 # ============================================================================
 
@@ -345,22 +347,35 @@ def route_after_intent(state: State) -> str:
     print("Routing to response...")
     return "responseNode"
 
-# TODO
-def entityEvaluatorBranch(state: State) -> bool:
-    # simple evaluator to decide if entity extraction is needed
-    action = state.get("action", "")
-    intent = state.get("intent", "")
-    entities = get_entities_by_intent_and_action_repo(mock_db, intent, action)
-    return len(entities) > 0
+def entityEvaluatorNode(state: State) -> dict:
+    entity_output = state.get("entity_model", {}).get("output", "")
 
-# TODO
+    try:
+        entities_parsed = entitiesParser(entity_output)
+    except ValueError:
+        entities_parsed = []
+
+    required_entities = get_entities_by_intent_and_action_repo(
+        mock_db,
+        state.get("intent"),
+        state.get("action"),
+    )
+
+    observed_codes = {entity.Code for entity in entities_parsed}
+    missing_entities = [
+        entity.get("name")
+        for entity in required_entities
+        if entity.get("name") and entity.get("name") not in observed_codes
+    ] 
+    return  {"missing_entities": missing_entities}
+
 def responseEntityFallbackNode(state: State) -> dict:
     # simple fallback response generator 
     intent = state.get("intent", "unknown_intent")
     language = state.get("language", "unknown_language")
     sentiment = state.get("sentiment", "unknown_sentiment")
 
-    response_text = f"Entity extraction could not be performed for intent: {intent}, language: {language}, sentiment: {sentiment}."
+    response_text = f"This is a Entity fallback node for intent: {intent}, language: {language}, sentiment: {sentiment}."
     return {
         "response": response_text
     }
@@ -385,7 +400,10 @@ builder.add_node("intentChatmodelNode", intentChatmodelNode)
 builder.add_node("actionDeciderNode", actionDeciderNode)
 builder.add_node("entityInputNode", entityInputNode)
 builder.add_node("entityChatmodelNode", entityChatmodelNode)
+builder.add_node("entityEvaluatorNode", entityEvaluatorNode)
 builder.add_node("responseNode", responseNode)
+builder.add_node("responseEntityFallbackNode", responseEntityFallbackNode)
+
 
 builder.add_edge(START, "intentInputNode")
 builder.add_edge("intentInputNode", "intentChatmodelNode")
@@ -399,8 +417,17 @@ builder.add_conditional_edges(
     },
 )
 builder.add_edge("entityInputNode", "entityChatmodelNode")
-builder.add_edge("entityChatmodelNode", "responseNode")
+builder.add_edge("entityChatmodelNode", "entityEvaluatorNode")
+builder.add_conditional_edges(
+    "entityEvaluatorNode",
+    lambda state: bool(state.get("missing_entities")),
+    {
+        True: "responseEntityFallbackNode",
+        False: "responseNode",
+    },
+)
 builder.add_edge("responseNode", END)
+builder.add_edge("responseEntityFallbackNode", END)
 
 graph = builder.compile()
 
@@ -428,6 +455,7 @@ def run_once(user_input: str):
             "userprompt": "",
             "output": "",
         },
+        "missing_entities": [],
         "response": "",
     }
 
@@ -444,6 +472,8 @@ def run_once(user_input: str):
     print(final["entity_model"]["userprompt"])
     print("=== ENTITY RESULT ===")
     print(final["entity_model"]["output"])
+    print("=== Missing ENTITY RESULT ===")
+    print(final["missing_entities"] ) 
     print("=== ENTITIES PARSED ===")
     entities_parsed = entitiesParser(final["entity_model"]["output"])
     for entity in entities_parsed:
@@ -452,4 +482,4 @@ def run_once(user_input: str):
     print(final.get("response", ""))
 
 if __name__ == "__main__":
-    run_once("อยากเช็คออเดอร์ #B67890 ครับ")
+    run_once("อยากเช็คออเดอร์ #B67890 ครับ จ่ายเงินเเล้วนะ 300 บาท")
