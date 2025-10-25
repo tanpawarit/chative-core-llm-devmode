@@ -424,7 +424,8 @@ def responseEntityFallbackNode(state: State) -> dict:
         missing_entities_json=missing_entities_json,
         formality=formality,
     )
-
+    # print("==== RenderResponseEntityFallbackPrompt ====")
+    # print(systemprompt)
     userprompt = state.get("conversation_userprompt", "")
     messages = [
         SystemMessage(content=systemprompt),
@@ -560,14 +561,9 @@ output_path = Path("graph_mermaid.png")
 output_path.write_bytes(graph_png)
 print(f"Saved graph visualization to {output_path.resolve()}")
 # ---- Demo runner -------------------------------------------------------------
-def run_once(user_input: str):
-    # Start with a tiny history and feed the new user message
-    initial_messages = [
-        {"role": "assistant", "content": "Hello! How can I help?"},
-        {"role": "user", "content": user_input},
-    ]
-    state = {
-        "messages": initial_messages,
+def _build_initial_state(messages: List[Dict[str, str]]) -> dict:
+    return {
+        "messages": list(messages),
         "intent_model": {
             "systemprompt": "",
             "userprompt": "",
@@ -581,25 +577,62 @@ def run_once(user_input: str):
         "missing_entities": [],
         "conversation_userprompt": "",
         "response": "",
+        "intent": "",
+        "language": "",
+        "sentiment": "",
+        "action": "",
     }
 
-    final = graph.invoke(state)
-    # print("=== SYSTEM PROMPT ===")
-    # print(final["intent_model"]["systemprompt"])
-    # print("=== USER PROMPT ===")
-    # print(final["intent_model"]["userprompt"])
-    # print("=== NLU OUTPUT ===")
-    # print(final["intent_model"]["output"]) 
-    # print("=== ENTITY SYSTEM PROMPT  ===")
-    # print(final["entity_model"]["systemprompt"])
-    # print("=== ENTITY USER PROMPT ===")
-    # print(final["entity_model"]["userprompt"])
-    print("=== ENTITY RESULT ===")
-    print(final["entity_model"]["output"])
-    print("=== Missing ENTITY RESULT ===")
-    print(final["missing_entities"] )  
-    print("=== FINAL RESPONSE ===")
-    print(final.get("response", ""))
+
+def run_once(initial_user_input: Optional[str] = None):
+    messages: List[Dict[str, str]] = [
+        {"role": "assistant", "content": "My name is Ema, and I'm an AI assistant for ACME Store."},
+    ]
+    print("My name is Ema, and I'm an AI assistant for ACME Store.")
+    print("Type 'quit' to end the conversation.")
+
+    pending_input = initial_user_input.strip() if isinstance(initial_user_input, str) else None
+
+    while True:
+        if pending_input is not None:
+            user_input = pending_input
+            pending_input = None
+            print(f"User: {user_input}")
+        else:
+            try:
+                user_input = input("User: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\nAssistant: Conversation ended.")
+                break
+
+        if not user_input:
+            continue
+
+        if user_input.lower() in {"quit", "exit"}:
+            print("Assistant: Goodbye.")
+            break
+
+        messages.append({"role": "user", "content": user_input})
+
+        state = _build_initial_state(messages)
+        final = graph.invoke(state)
+
+        response_text = final.get("response", "") or ""
+        print("=== conversation_userprompt ====")
+        print(final.get("conversation_userprompt"))
+        print("=== INTENT RESULT ====")
+        print(final.get("intent"))
+        print("=== ENTITY RESULT ===")
+        print(final.get("entity_model", {}).get("output", ""))
+        print("=== Missing ENTITY RESULT ===")
+        print(final.get("missing_entities", []))
+        print("=== FINAL RESPONSE ===")
+        print(response_text)
+
+        messages.append({"role": "assistant", "content": response_text})
+
+    return messages
+
 
 if __name__ == "__main__":
-    run_once("MBTI คืออะไรหรอครับ มีหนังสือขายใหม ")
+    run_once("what is ACME store sell?")

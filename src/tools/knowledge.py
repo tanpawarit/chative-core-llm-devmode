@@ -199,7 +199,7 @@ class KnowledgeRetriever:
         self,
         *,
         message: str,
-        workspace_id: Optional[str] = None,
+        workspace_id: Optional[str] = "workspace_2",
         top_k: Optional[int] = None,
         use_entities: bool = False,
         entities: Optional[Sequence[EntityInfo]] = None,
@@ -381,7 +381,7 @@ def hybrid_knowledge_search(
     branch_k: int = 40,
     weight_dense: float = 0.7,
     weight_sparse: float = 0.3,
-    workspace_id: Optional[str] = "workspace_1",
+    workspace_id: Optional[str] = "workspace_2",
 ) -> str:
     """Search the knowledge Milvus collection using hybrid semantic + sparse ranking.
 

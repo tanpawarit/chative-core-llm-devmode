@@ -46,15 +46,15 @@ def RenderConversationContextPrompt(messages: List[Dict[str, str]]) -> Tuple[str
     Returns: (prompt_str, current_user_text)
     """
     lines = ["<conversation_context>"]
-    current = ""
-    latest = ""
+    latest_user = ""
+    latest_any = ""
 
     for msg in messages:
         role = (msg.get("role") or "user").lower()
         text = (msg.get("text") or "").strip()
         if not text:
             continue
-        latest = text
+        latest_any = text
 
         if role == "assistant":
             lines.append(f"AssistantMessage({text})")
@@ -62,11 +62,9 @@ def RenderConversationContextPrompt(messages: List[Dict[str, str]]) -> Tuple[str
             lines.append(f"AdminMessage({text})")
         else:
             lines.append(f"UserMessage({text})")
-            if not current:
-                current = text
+            latest_user = text
 
-    if not current:
-        current = latest
+    current = latest_user or latest_any
 
     lines.append("</conversation_context>")
     lines.append("<current_message_to_analyze>")
@@ -311,7 +309,7 @@ Negative Sentiment Handling:
 Positive Sentiment Handling:
 - Information gathering can be energetic and collaborative
 - Match enthusiasm appropriately
-- Frame asks as partnership: "Great! To make this even better..."
+- Frame asks as partnership: "Great. To make this even better"
 - Build on positive momentum
 - Keep the positive energy flowing
 {{else if eq .Sentiment "neutral"}}
@@ -343,7 +341,7 @@ Default Sentiment Handling:
             "Positive Sentiment Handling:\n"
             "- Information gathering can be energetic and collaborative\n"
             "- Match enthusiasm appropriately\n"
-            "- Frame asks as partnership: \"Great! To make this even better...\"\n"
+            "- Frame asks as partnership: \"Great. To make this even better\"\n"
             "- Build on positive momentum\n"
             "- Keep the positive energy flowing"
         )
