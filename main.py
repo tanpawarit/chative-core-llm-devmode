@@ -1,13 +1,14 @@
 import html
 import os
 from pathlib import Path
-from typing import Annotated, List, Dict, Optional, Tuple, TypedDict
+from typing import Annotated, Dict, List, Optional, Tuple, TypedDict
 
 from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
-from langchain_core.messages import BaseMessage, ToolMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
+from langchain.agents import create_agent
 
 from src.prompt.prompt import (
     RenderDetectIntentSystemPrompt,
@@ -57,6 +58,7 @@ class State(TypedDict):
 
 llm = init_chat_model(f"{provider}:{model}", temperature=0.0)
 
+
 # Node 1: prepare NLU prompts from history
 INTENTS = "greet:0.6, search_product:0.8, farewell:0.6"  
 
@@ -78,9 +80,7 @@ mock_db = [
         ],
         "action": "knowledge_search",
         "entities": [
-            {"name": "order_id", "type": "text", "description": "order reference number"},
-            {"name": "payment_amount", "type": "currency", "description": "amount paid"},
-            {"name": "payment_status", "type": "text", "description": "status of payment"}
+            {"name": "product_type", "type": "text", "description": "type of product"}, 
         ]
     },
     {
@@ -325,9 +325,10 @@ def actionDeciderNode(state: State) -> dict:
 
 
 def route_after_intent(state: State) -> str:
-    if get_entities_by_intent_and_action_repo(
+
+    if len(get_entities_by_intent_and_action_repo(
         mock_db, state.get("intent"), state.get("action")
-    ):
+    ))!=0:
         print("Routing to entity extraction...")
         return "entityInputNode"
     print("Routing to response...")
@@ -399,8 +400,8 @@ def responseNode(state: State) -> dict:
         entities_str = ""
 
     # Use the conversation prompt built at the start; fallback to build if missing
-    userprompt = state.get("conversation_userprompt", "") 
-    
+    userprompt = state.get("conversation_userprompt", "")
+
     # Render system prompt; knowledge is fetched via tools if the model chooses
     allowed_tool_names = ", ".join([getattr(t, "name", "") for t in allowed_tools]) if allowed_tools else ""
     systemprompt = RenderResponseSystemPrompt(
@@ -414,38 +415,23 @@ def responseNode(state: State) -> dict:
         allowed_tools=allowed_tool_names or "none",
     )
 
-    # Bind the restricted toolset to the chat model
-    runnable = llm.bind_tools(allowed_tools) if allowed_tools else llm
-
-    # First pass: model may request tools
     messages = [
         SystemMessage(content=systemprompt),
         HumanMessage(content=userprompt),
     ]
-    result = runnable.invoke(messages)
 
-    # Handle a single round of tool-calling (simple ReAct pattern)
-    tool_calls = getattr(result, "tool_calls", None) or []
-    if allowed_tools and tool_calls:
-        tools_by_name = {t.name: t for t in allowed_tools}
-        for call in tool_calls:
-            name = call.get("name")
-            args = call.get("args") or {}
-            call_id = call.get("id")
-            tool = tools_by_name.get(name)
-            if not tool:
-                continue
-            try:
-                outcome = tool.invoke(args)
-            except Exception as exc:
-                outcome = f"Tool {name} failed: {exc}"
-
-            messages.extend([result, ToolMessage(content=str(outcome), tool_call_id=call_id)])
-
-        # Second pass: produce final answer grounded on tool results
-        final_msg = runnable.invoke(messages)
-        response_text = getattr(final_msg, "content", "") or ""
+    response_text = ""
+    if allowed_tools:
+        agent = create_agent(llm, tools=list(allowed_tools))
+        agent_state = agent.invoke({"messages": messages})
+        final_messages = agent_state.get("messages", [])
+        for msg in reversed(final_messages or []):
+            if isinstance(msg, AIMessage):
+                response_text = msg.content or ""
+                if response_text:
+                    break
     else:
+        result = llm.invoke(messages)
         response_text = getattr(result, "content", "") or ""
 
     if not response_text:
@@ -526,22 +512,22 @@ def run_once(user_input: str):
     # print(final["intent_model"]["systemprompt"])
     # print("=== USER PROMPT ===")
     # print(final["intent_model"]["userprompt"])
-    print("=== NLU OUTPUT ===")
-    print(final["intent_model"]["output"]) 
-    print("=== ENTITY SYSTEM PROMPT  ===")
-    print(final["entity_model"]["systemprompt"])
-    print("=== ENTITY USER PROMPT ===")
-    print(final["entity_model"]["userprompt"])
-    print("=== ENTITY RESULT ===")
-    print(final["entity_model"]["output"])
+    # print("=== NLU OUTPUT ===")
+    # print(final["intent_model"]["output"]) 
+    # print("=== ENTITY SYSTEM PROMPT  ===")
+    # print(final["entity_model"]["systemprompt"])
+    # print("=== ENTITY USER PROMPT ===")
+    # print(final["entity_model"]["userprompt"])
+    # print("=== ENTITY RESULT ===")
+    # print(final["entity_model"]["output"])
     print("=== Missing ENTITY RESULT ===")
     print(final["missing_entities"] ) 
-    print("=== ENTITIES PARSED ===")
-    entities_parsed = entitiesParser(final["entity_model"]["output"])
-    for entity in entities_parsed:
-        print(entity)
+    # print("=== ENTITIES PARSED ===")
+    # entities_parsed = entitiesParser(final["entity_model"]["output"])
+    # for entity in entities_parsed:
+    #     print(entity)
     print("=== FINAL RESPONSE ===")
     print(final.get("response", ""))
 
 if __name__ == "__main__":
-    run_once("อยากเช็คออเดอร์ #B67890 ครับ จ่ายเงินเเล้วนะ 300 บาท")
+    run_once("MBTI คืออะไรหรอครับ มีสินค้าใหม")
