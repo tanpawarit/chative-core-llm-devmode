@@ -423,17 +423,23 @@ def responseEntityFallbackNode(state: State) -> dict:
         entities_json=entities_json,
         missing_entities_json=missing_entities_json,
         formality=formality,
-    )
-    # print("==== RenderResponseEntityFallbackPrompt ====")
-    # print(systemprompt)
+    ) 
     userprompt = state.get("conversation_userprompt", "")
     messages = [
         SystemMessage(content=systemprompt),
         HumanMessage(content=userprompt),
     ]
 
-    result = llm.invoke(messages)
-    response_text = getattr(result, "content", "") or ""
+    agent = create_agent(llm, tools=[knowledge_search_tool])
+    agent_state = agent.invoke({"messages": messages})
+    final_messages = agent_state.get("messages", []) if isinstance(agent_state, dict) else []
+
+    response_text = ""
+    for msg in reversed(final_messages or []):
+        if isinstance(msg, AIMessage):
+            response_text = msg.content or ""
+            if response_text:
+                break
 
     if not response_text:
         fallback_missing = ", ".join(missing_entities) if missing_entities else "details"

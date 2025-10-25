@@ -455,9 +455,10 @@ class KnowledgeSearchInput(BaseModel):
 def knowledge_search_tool(message: str) -> str:
     """Search the knowledge base (Milvus hybrid) and return a concise, prompt-ready string.
     """
-
+    print("==== START SEARCH TOOL ====")
     retriever = KnowledgeRetriever(default_top_k=5)
     snippets = retriever.search(message=message)
+    print(retriever.format_for_prompt(snippets))
     return retriever.format_for_prompt(snippets)
 
 __all__ = [
