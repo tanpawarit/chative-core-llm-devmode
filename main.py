@@ -39,11 +39,12 @@ class EntityLm(TypedDict):
     output: str                               
  
 class State(TypedDict):
-    messages: Annotated[list, add_messages]      
-    intent_model: IntentLm 
+    messages: Annotated[list, add_messages]
+    conversation_userprompt: str
+    intent_model: IntentLm
     entity_model: EntityLm
     missing_entities: List[str]
-    
+
     intent: str
     language: str
     sentiment: str
@@ -146,7 +147,8 @@ def intentInputNode(state: State) -> dict:
         "intent_model": {
             "systemprompt": systemprompt,
             "userprompt": userprompt,
-            }
+            },
+        "conversation_userprompt": userprompt,
         }
 
 # Node 2: call LLM with just 2 messages (system + user)
@@ -166,31 +168,9 @@ def intentChatmodelNode(state: State) -> dict:
 
 # Node 3: prepare NLU prompts from history
 def entityInputNode(state: State) -> dict:
-    # Convert LangGraph messages -> our minimal schema
-    # Expect entries like {"role": "user"|"assistant", "content": "..."}
-    msgs: List[Dict[str, str]] = []
-    for m in state["messages"]:
-        if isinstance(m, dict):
-            role = m.get("role", "user")
-            text = (m.get("content") or "").strip()
-        elif isinstance(m, BaseMessage):
-            role = m.type  # "ai", "human", "system", etc.
-            text = (m.content or "").strip()
-        else:
-            continue
-        if not text:
-            continue
-        # map assistant/admin/user to our tiny schema
-        if role in {"assistant", "ai"}:
-            mapped_role = "assistant"
-        elif role == "system":
-            mapped_role = "admin"
-        else:
-            mapped_role = "user"
-        mapped = {"role": mapped_role, "text": text}
-        msgs.append(mapped)
-
-    userprompt, _current = RenderConversationContextPrompt(msgs)
+    # Use the pre-built conversation prompt from state (set at first node)
+    userprompt = state.get("conversation_userprompt", "")
+     
     systemprompt = RenderExtractEntitySystemPrompt(state.get("intent"), get_entities_repo(mock_db, state.get("intent")))
 
     return {
@@ -386,7 +366,7 @@ def responseEntityFallbackNode(state: State) -> dict:
         "response": response_text
     }
 
-# simple response generator with tool-calling (ReAct-style)
+# response generator with tool-calling (ReAct-style)
 def responseNode(state: State) -> dict:
     # Select tools based on routed action (restrict toolset per turn)
     action = state.get("action") or ""
@@ -418,17 +398,11 @@ def responseNode(state: State) -> dict:
         # If entity parsing fails, continue without entities
         entities_str = ""
 
-    # Build conversation context as the user message input
-    userprompt, _current = RenderConversationContextPrompt([
-        {"role": m.get("role", "user"), "text": m.get("content", "")}
-        if isinstance(m, dict)
-        else {"role": getattr(m, "type", "user"), "text": getattr(m, "content", "")}
-        for m in state.get("messages", [])
-        if (isinstance(m, dict) and (m.get("content") or "").strip())
-        or (hasattr(m, "content") and getattr(m, "content", None))
-    ])
-
+    # Use the conversation prompt built at the start; fallback to build if missing
+    userprompt = state.get("conversation_userprompt", "") 
+    
     # Render system prompt; knowledge is fetched via tools if the model chooses
+    allowed_tool_names = ", ".join([getattr(t, "name", "") for t in allowed_tools]) if allowed_tools else ""
     systemprompt = RenderResponseSystemPrompt(
         intent=intent,
         language=language,
@@ -436,6 +410,8 @@ def responseNode(state: State) -> dict:
         entities=entities_str or None,
         formality="friendly",
         knowledge=None,
+        action=action or "general_response",
+        allowed_tools=allowed_tool_names or "none",
     )
 
     # Bind the restricted toolset to the chat model
@@ -541,6 +517,7 @@ def run_once(user_input: str):
             "output": "",
         },
         "missing_entities": [],
+        "conversation_userprompt": "",
         "response": "",
     }
 

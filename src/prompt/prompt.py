@@ -85,6 +85,9 @@ def RenderResponseSystemPrompt(
     knowledge: Optional[str] = None,
     instruction: str = "Respond helpfully and accurately to the user's request while following business-appropriate tone and policies.",
     restriction: str = "Do not perform irreversible actions. Do not share confidential data. Use tools only when they improve factual accuracy.",
+    # Action protocol (simplified)
+    action: str = "general_response",
+    allowed_tools: Optional[str] = None,
 ) -> str:
     """Render the response system prompt from the template.
 
@@ -100,6 +103,8 @@ def RenderResponseSystemPrompt(
         "{{.Formality}}": formality or "friendly",
         "{{.Instruction}}": instruction or "",
         "{{.Restriction}}": restriction or "",
+        "{{.Action}}": action or "general_response",
+        "{{.AllowedTools}}": (allowed_tools or "none"),
     }
 
     # Optional sections
