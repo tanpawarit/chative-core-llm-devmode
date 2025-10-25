@@ -1,4 +1,5 @@
 import html
+import json
 import os
 from pathlib import Path
 from typing import Annotated, Dict, List, Optional, Tuple, TypedDict
@@ -15,6 +16,7 @@ from src.prompt.prompt import (
     RenderExtractEntitySystemPrompt,
     RenderConversationContextPrompt,
     RenderResponseSystemPrompt,
+    RenderResponseEntityFallbackPrompt,
 )
 from src.utils import DetectIntentResult, IntentInfo, LanguageInfo, SentimentInfo, intentParser, entitiesParser
 from src.tools.knowledge import knowledge_search_tool
@@ -280,6 +282,7 @@ def intentParser(
 
 # Node 5: simple action decider based on intent (response or entity)
 def actionDeciderNode(state: State) -> dict:
+    print("====== Start actionDeciderNode ======")
     intent_output = state["intent_model"]["output"]
     intent_result = intentParser(intent_output)
 
@@ -335,6 +338,7 @@ def route_after_intent(state: State) -> str:
     return "responseNode"
 
 def entityEvaluatorNode(state: State) -> dict:
+    print("====== Start entityEvaluatorNode ======")
     entity_output = state.get("entity_model", {}).get("output", "")
 
     try:
@@ -357,18 +361,90 @@ def entityEvaluatorNode(state: State) -> dict:
     return  {"missing_entities": missing_entities}
 
 def responseEntityFallbackNode(state: State) -> dict:
-    # simple fallback response generator 
+    """Generate a graceful response when required entities are missing."""
+    print("====== Start responseEntityFallbackNode ======")
     intent = state.get("intent", "unknown_intent")
-    language = state.get("language", "unknown_language")
-    sentiment = state.get("sentiment", "unknown_sentiment")
+    language = state.get("language", "English")
+    sentiment = state.get("sentiment", "neutral")
+    formality = "friendly"
+    missing_entities = state.get("missing_entities") or []
+    action = state.get("action")
 
-    response_text = f"This is a Entity fallback node for intent: {intent}, language: {language}, sentiment: {sentiment}."
-    return {
-        "response": response_text
-    }
+    entities_catalog = get_entities_by_intent_and_action_repo(mock_db, intent, action)
+
+    parsed_entities = []
+    try:
+        raw_entities = (state.get("entity_model") or {}).get("output")
+        if raw_entities:
+            parsed_entities = entitiesParser(raw_entities)
+    except ValueError:
+        parsed_entities = []
+
+    parsed_map = {}
+    for entity in parsed_entities:
+        value = entity.NormalizedValue or entity.OriginalValue
+        parsed_map[entity.Code] = value
+
+    catalog_names = {item.get("name") for item in entities_catalog if item.get("name")}
+    entities_payload = []
+    for item in entities_catalog:
+        name = item.get("name")
+        if not name:
+            continue
+        entities_payload.append(
+            {
+                "name": name,
+                "type": item.get("type", "text"),
+                "required": item.get("required", True),
+                "description": item.get("description", ""),
+                "value": parsed_map.get(name),
+            }
+        )
+
+    for entity in parsed_entities:
+        if entity.Code not in catalog_names:
+            entities_payload.append(
+                {
+                    "name": entity.Code,
+                    "type": "text",
+                    "required": False,
+                    "description": "",
+                    "value": entity.NormalizedValue or entity.OriginalValue,
+                }
+            )
+
+    entities_json = json.dumps(entities_payload, ensure_ascii=False, indent=2)
+    missing_entities_json = json.dumps(missing_entities, ensure_ascii=False)
+
+    systemprompt = RenderResponseEntityFallbackPrompt(
+        intent=intent,
+        language=language,
+        sentiment=sentiment,
+        entities_json=entities_json,
+        missing_entities_json=missing_entities_json,
+        formality=formality,
+    )
+
+    userprompt = state.get("conversation_userprompt", "")
+    messages = [
+        SystemMessage(content=systemprompt),
+        HumanMessage(content=userprompt),
+    ]
+
+    result = llm.invoke(messages)
+    response_text = getattr(result, "content", "") or ""
+
+    if not response_text:
+        fallback_missing = ", ".join(missing_entities) if missing_entities else "details"
+        response_text = (
+            f"I'm missing a bit of information to fully resolve this. Could you share the {fallback_missing}?"
+        )
+
+    return {"response": response_text}
 
 # response generator with tool-calling (ReAct-style)
 def responseNode(state: State) -> dict:
+    print("====== Start responseNode ======")
     # Select tools based on routed action (restrict toolset per turn)
     action = state.get("action") or ""
     tools_map = {
@@ -518,16 +594,12 @@ def run_once(user_input: str):
     # print(final["entity_model"]["systemprompt"])
     # print("=== ENTITY USER PROMPT ===")
     # print(final["entity_model"]["userprompt"])
-    # print("=== ENTITY RESULT ===")
-    # print(final["entity_model"]["output"])
+    print("=== ENTITY RESULT ===")
+    print(final["entity_model"]["output"])
     print("=== Missing ENTITY RESULT ===")
-    print(final["missing_entities"] ) 
-    # print("=== ENTITIES PARSED ===")
-    # entities_parsed = entitiesParser(final["entity_model"]["output"])
-    # for entity in entities_parsed:
-    #     print(entity)
+    print(final["missing_entities"] )  
     print("=== FINAL RESPONSE ===")
     print(final.get("response", ""))
 
 if __name__ == "__main__":
-    run_once("MBTI คืออะไรหรอครับ มีสินค้าใหม")
+    run_once("MBTI คืออะไรหรอครับ มีหนังสือขายใหม ")
