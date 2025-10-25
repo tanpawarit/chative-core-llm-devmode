@@ -5,12 +5,18 @@ from typing import Annotated, List, Dict, Optional, Tuple, TypedDict
 
 from dotenv import load_dotenv
 from langchain.chat_models import init_chat_model
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, ToolMessage, HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 
-from src.prompt.prompt import RenderDetectIntentSystemPrompt, RenderExtractEntitySystemPrompt, RenderConversationContextPrompt
+from src.prompt.prompt import (
+    RenderDetectIntentSystemPrompt,
+    RenderExtractEntitySystemPrompt,
+    RenderConversationContextPrompt,
+    RenderResponseSystemPrompt,
+)
 from src.utils import DetectIntentResult, IntentInfo, LanguageInfo, SentimentInfo, intentParser, entitiesParser
+from src.tools.knowledge import knowledge_search_tool
  
 # ---- LangGraph wiring --------------------------------------------------------
 load_dotenv()
@@ -380,17 +386,96 @@ def responseEntityFallbackNode(state: State) -> dict:
         "response": response_text
     }
 
-# simple response generator 
+# simple response generator with tool-calling (ReAct-style)
 def responseNode(state: State) -> dict:
-    # Placeholder response generator
-    intent = state.get("intent", "unknown_intent")
-    language = state.get("language", "unknown_language")
-    sentiment = state.get("sentiment", "unknown_sentiment")
-
-    response_text = f"Detected intent: {intent}, language: {language}, sentiment: {sentiment}."
-    return {
-        "response": response_text
+    # Select tools based on routed action (restrict toolset per turn)
+    action = state.get("action") or ""
+    tools_map = {
+        "knowledge_search": [knowledge_search_tool],
+        # Future actions can map to their specific tools, e.g.:
+        # "checkout": [start_checkout_tool, confirm_payment_tool],
     }
+    allowed_tools = tools_map.get(action, [])
+
+    # Prepare context
+    intent = state.get("intent", "unknown_intent")
+    language = state.get("language", "English")
+    sentiment = state.get("sentiment", "neutral")
+
+    # Try parse entities from the entity_model output (if available)
+    entities_str = ""
+    try:
+        raw_entities = (state.get("entity_model") or {}).get("output")
+        if raw_entities:
+            parsed_entities = entitiesParser(raw_entities)
+            # Compact human-readable summary: CODE=NormalizedValue (confidence)
+            parts = []
+            for e in parsed_entities:
+                val = e.NormalizedValue or e.OriginalValue
+                parts.append(f"{e.Code}={val}")
+            entities_str = ", ".join(parts)
+    except Exception:
+        # If entity parsing fails, continue without entities
+        entities_str = ""
+
+    # Build conversation context as the user message input
+    userprompt, _current = RenderConversationContextPrompt([
+        {"role": m.get("role", "user"), "text": m.get("content", "")}
+        if isinstance(m, dict)
+        else {"role": getattr(m, "type", "user"), "text": getattr(m, "content", "")}
+        for m in state.get("messages", [])
+        if (isinstance(m, dict) and (m.get("content") or "").strip())
+        or (hasattr(m, "content") and getattr(m, "content", None))
+    ])
+
+    # Render system prompt; knowledge is fetched via tools if the model chooses
+    systemprompt = RenderResponseSystemPrompt(
+        intent=intent,
+        language=language,
+        sentiment=sentiment,
+        entities=entities_str or None,
+        formality="friendly",
+        knowledge=None,
+    )
+
+    # Bind the restricted toolset to the chat model
+    runnable = llm.bind_tools(allowed_tools) if allowed_tools else llm
+
+    # First pass: model may request tools
+    messages = [
+        SystemMessage(content=systemprompt),
+        HumanMessage(content=userprompt),
+    ]
+    result = runnable.invoke(messages)
+
+    # Handle a single round of tool-calling (simple ReAct pattern)
+    tool_calls = getattr(result, "tool_calls", None) or []
+    if allowed_tools and tool_calls:
+        tools_by_name = {t.name: t for t in allowed_tools}
+        for call in tool_calls:
+            name = call.get("name")
+            args = call.get("args") or {}
+            call_id = call.get("id")
+            tool = tools_by_name.get(name)
+            if not tool:
+                continue
+            try:
+                outcome = tool.invoke(args)
+            except Exception as exc:
+                outcome = f"Tool {name} failed: {exc}"
+
+            messages.extend([result, ToolMessage(content=str(outcome), tool_call_id=call_id)])
+
+        # Second pass: produce final answer grounded on tool results
+        final_msg = runnable.invoke(messages)
+        response_text = getattr(final_msg, "content", "") or ""
+    else:
+        response_text = getattr(result, "content", "") or ""
+
+    if not response_text:
+        response_text = f"Detected intent: {intent}, language: {language}, sentiment: {sentiment}."
+
+    return {"response": response_text}
 
 
 # Build graph
