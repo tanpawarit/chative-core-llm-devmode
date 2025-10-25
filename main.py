@@ -9,7 +9,7 @@ from langchain_core.messages import BaseMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.message import add_messages
 
-from prompt.prompt import RenderDetectIntentSystemPrompt, RenderExtractEntitySystemPrompt, RenderConversationContextPrompt
+from src.prompt.prompt import RenderDetectIntentSystemPrompt, RenderExtractEntitySystemPrompt, RenderConversationContextPrompt
 from src.utils import DetectIntentResult, IntentInfo, LanguageInfo, SentimentInfo, intentParser, entitiesParser
  
 # ---- LangGraph wiring --------------------------------------------------------

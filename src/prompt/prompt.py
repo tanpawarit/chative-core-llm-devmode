@@ -1,7 +1,8 @@
 import json
-from prompt.detect_intent import INTENT_TEMPLATE
-from prompt.extract_entity import ENTITY_TEMPLATE
-from typing import List, Dict, Tuple, Union
+from typing import Dict, List, Tuple, Union
+
+from .detect_intent import INTENT_TEMPLATE
+from .extract_entity import ENTITY_TEMPLATE
 
 def RenderDetectIntentSystemPrompt(
     intents: str,
