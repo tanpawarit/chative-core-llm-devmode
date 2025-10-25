@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from langchain_core.tools import tool
+from langchain_core.pydantic_v1 import BaseModel, Field
 from langchain_openai import OpenAIEmbeddings
 from pymilvus.client.abstract import AnnSearchRequest, WeightedRanker
 
@@ -373,7 +374,6 @@ class KnowledgeRetriever:
             score=score_value,
             metadata=metadata,
         )
-
  
 def hybrid_knowledge_search(
     query: str,
@@ -444,6 +444,21 @@ def hybrid_knowledge_search(
 
     return json.dumps(payload, ensure_ascii=False)
 
+# ---- LangChain Tool wrapper -------------------------------------------------
+class KnowledgeSearchInput(BaseModel):
+    """Input schema for the `knowledge_search` tool."""
+
+    message: str = Field(..., description="Natural language query to search the knowledge base.")
+
+
+@tool("knowledge_search", args_schema=KnowledgeSearchInput)
+def knowledge_search_tool(message: str) -> str:
+    """Search the knowledge base (Milvus hybrid) and return a concise, prompt-ready string.
+    """
+
+    retriever = KnowledgeRetriever(default_top_k=5)
+    snippets = retriever.search(message=message)
+    return retriever.format_for_prompt(snippets)
 
 __all__ = [
     "hybrid_knowledge_search",
@@ -451,6 +466,7 @@ __all__ = [
     "KnowledgeRetriever",
     "KnowledgeSnippet",
     "RetrieverError",
+    "knowledge_search_tool",
 ]
 
 # Example usage:
